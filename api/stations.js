@@ -4,9 +4,9 @@ async function api(endpoint, params = {}) {
   if (!KEY) throw new Error('OPINET_KEY가 설정되지 않았습니다.');
   const u = new URL('https://www.opinet.co.kr/api/' + endpoint);
   u.searchParams.set('out', 'json');
-  u.searchParams.set('code', KEY);
+  u.searchParams.set('certkey', KEY);
   for (const [k, v] of Object.entries(params)) u.searchParams.set(k, String(v));
-  const r = await fetch(u.toString());
+  const r = await fetch(u.toString(), { cache: 'no-store' });
   if (!r.ok) throw new Error('오피넷 HTTP ' + r.status);
   const text = await r.text();
   try { return JSON.parse(text); } catch { throw new Error('오피넷 응답 형식 오류'); }
@@ -40,6 +40,7 @@ module.exports = async (req, res) => {
     const targets = [];
     if (area === 'both' || area === 'yongsan') targets.push(['용산구', c.yongsan]);
     if (area === 'both' || area === 'mapo') targets.push(['마포구', c.mapo]);
+
     const chunks = await Promise.all(targets.map(async ([district, code]) => {
       const rows = oils(await api('lowTop10.do', { prodcd, area: code, cnt: 20 }));
       return rows.map(x => ({
@@ -51,6 +52,7 @@ module.exports = async (req, res) => {
         district
       }));
     }));
+
     const stations = chunks.flat().filter(x => x.price > 0).sort((a, b) => a.price - b.price);
     res.status(200).json({ ok: true, updatedAt: new Date().toISOString(), stations });
   } catch (e) {
