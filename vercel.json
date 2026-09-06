@@ -1,1 +1,0 @@
-{"version":2,"rewrites":[{"source":"/api/stations","destination":"/api/stations.js"}]}
