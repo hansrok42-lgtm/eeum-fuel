@@ -1,53 +1,9 @@
-const KEY = (process.env.OPINET_KEY || '').trim();
-
-// Opinet Seoul sigungu codes: Mapo 0114, Yongsan 0103.
-const AREA_CODES = {
-  mapo: { district: '마포구', code: '0114' },
-  yongsan: { district: '용산구', code: '0103' }
-};
-
-function decodeXml(s = '') {
-  return String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
-}
-function tag(block, name) {
-  const m = block.match(new RegExp(`<${name}>([\\s\\S]*?)<\\/${name}>`, 'i'));
-  return m ? decodeXml(m[1].trim()) : '';
-}
-
-async function lowTop(areaCode, prodcd) {
-  if (!KEY) throw new Error('OPINET_KEY가 설정되지 않았습니다.');
-  const u = new URL('https://www.opinet.co.kr/api/lowTop10.do');
-  u.searchParams.set('out', 'xml');
-  u.searchParams.set('certkey', KEY);
-  u.searchParams.set('area', areaCode);
-  u.searchParams.set('prodcd', prodcd);
-  u.searchParams.set('cnt', '20');
-
-  const r = await fetch(u.toString(), { cache: 'no-store' });
-  if (!r.ok) throw new Error('오피넷 HTTP ' + r.status);
-  const xml = await r.text();
-  const blocks = [...xml.matchAll(/<OIL>([\s\S]*?)<\/OIL>/gi)].map(m => m[1]);
-  return blocks.map(b => ({
-    id: tag(b, 'UNI_ID'), name: tag(b, 'OS_NM'),
-    price: Number((tag(b, 'PRICE') || '0').replace(/,/g, '')),
-    brand: tag(b, 'POLL_DIV_CO') || tag(b, 'POLL_DIV_CD'),
-    address: tag(b, 'NEW_ADR') || tag(b, 'VAN_ADR')
-  })).filter(x => x.name && x.price > 0);
-}
-
-module.exports = async (req, res) => {
-  res.setHeader('Cache-Control', 'no-store');
-  try {
-    const prodcd = (req.query && req.query.prodcd) || 'B027';
-    const area = (req.query && req.query.area) || 'both';
-    const targets = [];
-    if (area === 'both' || area === 'yongsan') targets.push(AREA_CODES.yongsan);
-    if (area === 'both' || area === 'mapo') targets.push(AREA_CODES.mapo);
-    const chunks = await Promise.all(targets.map(async t => (await lowTop(t.code, prodcd)).map(x => ({ ...x, district: t.district }))));
-    const stations = chunks.flat().sort((a, b) => a.price - b.price);
-    if (!stations.length) throw new Error('오피넷 응답에 주유소 데이터가 없습니다. 인증키 활성화 상태를 확인해주세요.');
-    res.status(200).json({ ok: true, updatedAt: new Date().toISOString(), stations });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-};
+const KEY=(process.env.OPINET_KEY||'').trim();
+function dec(s=''){return String(s).replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g,"'")}
+function tag(b,n){const m=b.match(new RegExp(`<${n}>([\\s\\S]*?)<\\/${n}>`,'i'));return m?dec(m[1].trim()):''}
+async function request(endpoint,params={}){if(!KEY)throw new Error('OPINET_KEY가 설정되지 않았습니다.');const u=new URL('https://www.opinet.co.kr/api/'+endpoint);u.searchParams.set('out','xml');u.searchParams.set('certkey',KEY);for(const[k,v]of Object.entries(params))u.searchParams.set(k,String(v));const r=await fetch(u.toString(),{cache:'no-store'});const text=await r.text();if(!r.ok)throw new Error('오피넷 HTTP '+r.status);const err=tag(text,'ERROR')||tag(text,'ERR_MSG')||tag(text,'MESSAGE');if(err)throw new Error('오피넷: '+err);return text}
+function blocks(xml){return[...xml.matchAll(/<OIL>([\s\S]*?)<\/OIL>/gi)].map(m=>m[1])}
+let cachedAreas=null;
+async function areas(){if(cachedAreas)return cachedAreas;const xml=await request('areaCode.do',{area:'01'});const rows=blocks(xml).map(b=>({code:tag(b,'AREA_CD'),name:tag(b,'AREA_NM')}));const y=rows.find(x=>x.name==='용산구'),m=rows.find(x=>x.name==='마포구');if(!y||!m)throw new Error('오피넷 지역코드 조회 실패');cachedAreas={yongsan:{district:'용산구',code:y.code},mapo:{district:'마포구',code:m.code}};return cachedAreas}
+async function lowTop(code,prodcd){const xml=await request('lowTop10.do',{prodcd,area:code,cnt:'20'});return blocks(xml).map(b=>({id:tag(b,'UNI_ID'),name:tag(b,'OS_NM'),price:Number((tag(b,'PRICE')||'0').replace(/,/g,'')),brand:tag(b,'POLL_DIV_CD')||tag(b,'POLL_DIV_CO'),address:tag(b,'NEW_ADR')||tag(b,'VAN_ADR')})).filter(x=>x.name&&x.price>0)}
+module.exports=async(req,res)=>{res.setHeader('Cache-Control','no-store');try{const prodcd=req.query?.prodcd||'B027',area=req.query?.area||'both',a=await areas(),targets=[];if(area==='both'||area==='yongsan')targets.push(a.yongsan);if(area==='both'||area==='mapo')targets.push(a.mapo);const chunks=await Promise.all(targets.map(async t=>(await lowTop(t.code,prodcd)).map(x=>({...x,district:t.district}))));const stations=chunks.flat().sort((x,y)=>x.price-y.price);if(!stations.length)throw new Error('오피넷에서 현재 가격 데이터가 반환되지 않았습니다.');return res.status(200).json({ok:true,updatedAt:new Date().toISOString(),stations});}catch(e){return res.status(500).json({ok:false,error:e.message})}};
