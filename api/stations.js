@@ -1,9 +1,10 @@
 const KEY=(process.env.OPINET_KEY||'').trim();
 
-// 서울 시군구 코드: 용산구 0103, 마포구 0114
+// 오피넷 서울 시군구 코드
+// 마포구 0109 / 용산구 0110
 const AREA_CODES={
-  yongsan:{district:'용산구',code:'0103'},
-  mapo:{district:'마포구',code:'0114'}
+  yongsan:{district:'용산구',code:'0110'},
+  mapo:{district:'마포구',code:'0109'}
 };
 
 function dec(s=''){return String(s).replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g,"'")}
@@ -45,7 +46,7 @@ module.exports=async(req,res)=>{
     if(area==='both'||area==='mapo')targets.push(AREA_CODES.mapo);
     const chunks=await Promise.all(targets.map(async t=>(await lowTop(t.code,prodcd)).map(x=>({...x,district:t.district}))));
     const stations=chunks.flat().sort((a,b)=>a.price-b.price);
-    if(!stations.length)throw new Error('오피넷에서 현재 가격 데이터가 반환되지 않았습니다. 인증키 상태를 확인해주세요.');
+    if(!stations.length)throw new Error('오피넷에서 현재 가격 데이터가 반환되지 않았습니다.');
     return res.status(200).json({ok:true,updatedAt:new Date().toISOString(),stations});
   }catch(e){return res.status(500).json({ok:false,error:e.message});}
 };
