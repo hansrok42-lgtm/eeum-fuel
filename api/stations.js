@@ -44,6 +44,8 @@ async function getLowPrice(district, code, prodcd) {
     price: Number((tag(b, 'PRICE') || '0').replace(/,/g, '')),
     brand: tag(b, 'POLL_DIV_CD') || tag(b, 'POLL_DIV_CO'),
     address: tag(b, 'NEW_ADR') || tag(b, 'VAN_ADR'),
+    x: Number(tag(b, 'GIS_X_COOR') || 0),
+    y: Number(tag(b, 'GIS_Y_COOR') || 0),
     district
   })).filter(x => x.name && x.price > 0);
   return { stations, raw: result.text };
