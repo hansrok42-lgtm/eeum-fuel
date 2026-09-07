@@ -3,7 +3,7 @@ const KEY = (process.env.OPINET_KEY || '').trim();
 async function call(endpoint, params = {}) {
   const url = new URL(`https://www.opinet.co.kr/api/${endpoint}`);
 
-  url.searchParams.set('certkey', KEY);
+  url.searchParams.set('code', KEY);
   url.searchParams.set('out', 'json');
 
   for (const [k, v] of Object.entries(params)) {
@@ -56,7 +56,6 @@ module.exports = async (req, res) => {
       keyLength: KEY.length,
       tests
     });
-
   } catch (e) {
     return res.status(500).json({
       ok: false,
