@@ -1,1 +1,1 @@
-{"name":"eeum-fuel","version":"1.0.0","private":true,"engines":{"node":">=18"}}
+{"name":"eeum-fuel","version":"1.0.0","private":true,"engines":{"node":">=18"},"dependencies":{"proj4":"^2.15.0"}}
