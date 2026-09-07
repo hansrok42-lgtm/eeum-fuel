@@ -3,7 +3,8 @@ const KEY = (process.env.OPINET_KEY || '').trim();
 const AREAS = {
   yongsan: { district: '용산구', code: '0110' },
   mapo: { district: '마포구', code: '0109' },
-  seodaemun: { district: '서대문구', code: '0114' }
+  seodaemun: { district: '서대문구', code: '0114' },
+  seoul: { district: '서울전역', code: '01' }
 };
 
 function decodeHtml(s = '') {
@@ -35,19 +36,27 @@ async function opinet(endpoint, params = {}) {
   return { status: response.status, text };
 }
 
+function districtFromAddress(address, fallback) {
+  const m = String(address || '').match(/서울(?:특별시)?\s+([^\s]+구)/);
+  return m ? m[1] : fallback;
+}
+
 async function getLowPrice(district, code, prodcd) {
   const result = await opinet('lowTop10.do', { prodcd, area: code, cnt: 20 });
   const blocks = oilBlocks(result.text);
-  const stations = blocks.map(b => ({
-    id: tag(b, 'UNI_ID'),
-    name: tag(b, 'OS_NM'),
-    price: Number((tag(b, 'PRICE') || '0').replace(/,/g, '')),
-    brand: tag(b, 'POLL_DIV_CD') || tag(b, 'POLL_DIV_CO'),
-    address: tag(b, 'NEW_ADR') || tag(b, 'VAN_ADR'),
-    x: Number(tag(b, 'GIS_X_COOR') || 0),
-    y: Number(tag(b, 'GIS_Y_COOR') || 0),
-    district
-  })).filter(x => x.name && x.price > 0);
+  const stations = blocks.map(b => {
+    const address = tag(b, 'NEW_ADR') || tag(b, 'VAN_ADR');
+    return {
+      id: tag(b, 'UNI_ID'),
+      name: tag(b, 'OS_NM'),
+      price: Number((tag(b, 'PRICE') || '0').replace(/,/g, '')),
+      brand: tag(b, 'POLL_DIV_CD') || tag(b, 'POLL_DIV_CO'),
+      address,
+      x: Number(tag(b, 'GIS_X_COOR') || 0),
+      y: Number(tag(b, 'GIS_Y_COOR') || 0),
+      district: districtFromAddress(address, district)
+    };
+  }).filter(x => x.name && x.price > 0);
   return { stations, raw: result.text };
 }
 
@@ -57,9 +66,15 @@ module.exports = async (req, res) => {
     const prodcd = req.query?.prodcd || 'B027';
     const area = req.query?.area || 'both';
     const targets = [];
-    if (area === 'both' || area === 'yongsan') targets.push(AREAS.yongsan);
-    if (area === 'both' || area === 'mapo') targets.push(AREAS.mapo);
-    if (area === 'both' || area === 'seodaemun') targets.push(AREAS.seodaemun);
+
+    if (area === 'seoul') {
+      targets.push(AREAS.seoul);
+    } else {
+      if (area === 'both' || area === 'yongsan') targets.push(AREAS.yongsan);
+      if (area === 'both' || area === 'mapo') targets.push(AREAS.mapo);
+      if (area === 'both' || area === 'seodaemun') targets.push(AREAS.seodaemun);
+    }
+
     if (!targets.length) return res.status(400).json({ ok: false, error: '잘못된 지역값입니다.' });
 
     const stations = [];
@@ -69,12 +84,15 @@ module.exports = async (req, res) => {
       stations.push(...result.stations);
       debug.push({ district: target.district, areaCode: target.code, count: result.stations.length });
     }
+
     stations.sort((a, b) => a.price - b.price);
     if (!stations.length) return res.status(502).json({ ok: false, error: '오피넷 가격 데이터가 없습니다.', prodcd, debug });
+
     return res.status(200).json({
       ok: true,
       updatedAt: new Date().toISOString(),
-      detectedAreas: { yongsan: AREAS.yongsan, mapo: AREAS.mapo, seodaemun: AREAS.seodaemun },
+      note: area === 'seoul' ? '오피넷 서울 전체 최저가 TOP20 기준' : undefined,
+      detectedAreas: { yongsan: AREAS.yongsan, mapo: AREAS.mapo, seodaemun: AREAS.seodaemun, seoul: AREAS.seoul },
       stations
     });
   } catch (e) {
