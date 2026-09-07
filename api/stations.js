@@ -1,72 +1,19 @@
+const proj4 = require('proj4');
 const KEY = (process.env.OPINET_KEY || '').trim();
-
-const AREAS = {
-  yongsan: { district: '용산구', code: '0110' },
-  mapo: { district: '마포구', code: '0109' },
-  seodaemun: { district: '서대문구', code: '0114' },
-  seoul: { district: '서울전역', code: '01' }
-};
-
-// 2026-09 기준 공개 영업정보에서 24시간 운영이 최근 확인된 주유소만 등록합니다.
-// 과거 자료와 현재 정보가 충돌한 곳은 제외했습니다.
-const OPEN_24H_STATIONS = [
-  { id: 'A0000173', name: '에스에스오토셀프', district: '마포구', address: '서울 마포구 서강로 76', phone: '02-336-5185' },
-  { id: 'A0000163', name: '(주)만성상사 대흥주유소', district: '마포구', address: '서울 마포구 대흥로 61', phone: '02-3273-5151' },
-  { id: 'A0000129', name: 'SK에너지(주) 양지주유소', district: '마포구', address: '서울 마포구 마포대로 69', phone: '02-706-8955' },
-  { id: 'A0000627', name: '행촌제2주유소', district: '서대문구', address: '서울 서대문구 성산로 490', phone: '02-365-5189' }
-];
-const OPEN_24H_IDS = new Set(OPEN_24H_STATIONS.map(x => x.id));
-const OPEN_24H_NAMES = OPEN_24H_STATIONS.map(x => x.name.replace(/^\(주\)\s*/, ''));
-function isOpen24h(id='', name='') {
-  if (OPEN_24H_IDS.has(String(id))) return true;
-  const n = String(name);
-  return OPEN_24H_NAMES.some(k => n.includes(k) || k.includes(n));
-}
-function decodeHtml(s = '') { return String(s).replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g,"'"); }
+const KATEC = '+proj=tmerc +lat_0=38 +lon_0=128 +k=0.9999 +x_0=400000 +y_0=600000 +ellps=bessel +units=m +towgs84=-115.80,474.99,674.11,1.16,-2.31,-1.63,6.43 +no_defs';
+const AREAS={yongsan:{district:'용산구',code:'0110'},mapo:{district:'마포구',code:'0109'},seodaemun:{district:'서대문구',code:'0114'},seoul:{district:'서울전역',code:'01'}};
+const OPEN_24H_STATIONS=[{id:'A0000173',name:'에스에스오토셀프',district:'마포구',address:'서울 마포구 서강로 76',phone:'02-336-5185'},{id:'A0000163',name:'(주)만성상사 대흥주유소',district:'마포구',address:'서울 마포구 대흥로 61',phone:'02-3273-5151'},{id:'A0000129',name:'SK에너지(주) 양지주유소',district:'마포구',address:'서울 마포구 마포대로 69',phone:'02-706-8955'},{id:'A0000627',name:'행촌제2주유소',district:'서대문구',address:'서울 서대문구 성산로 490',phone:'02-365-5189'}];
+const OPEN_24H_IDS=new Set(OPEN_24H_STATIONS.map(x=>x.id));const OPEN_24H_NAMES=OPEN_24H_STATIONS.map(x=>x.name.replace(/^\(주\)\s*/,''));
+function isOpen24h(id='',name=''){if(OPEN_24H_IDS.has(String(id)))return true;const n=String(name);return OPEN_24H_NAMES.some(k=>n.includes(k)||k.includes(n))}
+function decodeHtml(s=''){return String(s).replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g,"'")}
 function tag(body,name){const m=String(body||'').match(new RegExp(`<${name}>([\\s\\S]*?)<\\/${name}>`,'i'));return m?decodeHtml(m[1].trim()):''}
 function oilBlocks(xml=''){return [...String(xml).matchAll(/<OIL>([\s\S]*?)<\/OIL>/gi)].map(m=>m[1])}
 function oilPriceBlocks(xml=''){return [...String(xml).matchAll(/<OIL_PRICE>([\s\S]*?)<\/OIL_PRICE>/gi)].map(m=>m[1])}
 function fuelPrice(xml,prodcd){for(const b of oilPriceBlocks(xml)){if(tag(b,'PRODCD')===prodcd){const p=Number((tag(b,'PRICE')||'0').replace(/,/g,''));if(Number.isFinite(p))return p}}return 0}
 async function opinet(endpoint,params={}){if(!KEY)throw new Error('OPINET_KEY가 설정되지 않았습니다.');const url=new URL(`https://www.opinet.co.kr/api/${endpoint}`);url.searchParams.set('out','xml');url.searchParams.set('code',KEY);for(const[k,v]of Object.entries(params))url.searchParams.set(k,String(v));const response=await fetch(url.toString(),{cache:'no-store'});return{status:response.status,text:await response.text()}}
 function districtFromAddress(address,fallback){const m=String(address||'').match(/서울(?:특별시)?\s+([^\s]+구)/);return m?m[1]:fallback}
-
-async function getLowPrice(district,code,prodcd){const result=await opinet('lowTop10.do',{prodcd,area:code,cnt:20});const stations=oilBlocks(result.text).map(b=>{const id=tag(b,'UNI_ID');const address=tag(b,'NEW_ADR')||tag(b,'VAN_ADR');const name=tag(b,'OS_NM');const baseDistrict=districtFromAddress(address,district);return{id,name,price:Number((tag(b,'PRICE')||'0').replace(/,/g,'')),brand:tag(b,'POLL_DIV_CD')||tag(b,'POLL_DIV_CO'),address,x:Number(tag(b,'GIS_X_COOR')||0),y:Number(tag(b,'GIS_Y_COOR')||0),district:baseDistrict,open24h:isOpen24h(id,name)}}).filter(x=>x.name&&x.price>0);return{stations,raw:result.text}}
-
-async function getNearby(x,y,prodcd){const result=await opinet('aroundAll.do',{x,y,radius:5000,sort:2,prodcd});const stations=oilBlocks(result.text).map(b=>{const id=tag(b,'UNI_ID');const name=tag(b,'OS_NM');return{id,name,price:Number((tag(b,'PRICE')||'0').replace(/,/g,'')),brand:tag(b,'POLL_DIV_CD')||tag(b,'POLL_DIV_CO'),address:'',x:Number(tag(b,'GIS_X_COOR')||0),y:Number(tag(b,'GIS_Y_COOR')||0),distance:Number(tag(b,'DISTANCE')||0),district:'내 주변',open24h:isOpen24h(id,name)}}).filter(x=>x.name&&x.price>0).sort((a,b)=>a.distance-b.distance);return{stations,raw:result.text}}
-
-async function getDetail(id){const result=await opinet('detailById.do',{id});const b=oilBlocks(result.text)[0]||'';const address=tag(b,'NEW_ADR')||tag(b,'VAN_ADR');return{id:tag(b,'UNI_ID')||id,name:tag(b,'OS_NM'),phone:tag(b,'TEL'),address,district:districtFromAddress(address,'')}}
-
-async function get24h(prodcd){
-  const stations=[];
-  for(const meta of OPEN_24H_STATIONS){
-    try{
-      const result=await opinet('detailById.do',{id:meta.id});
-      const b=oilBlocks(result.text)[0]||'';
-      const address=tag(b,'NEW_ADR')||tag(b,'VAN_ADR')||meta.address;
-      const name=tag(b,'OS_NM')||meta.name;
-      stations.push({
-        id:meta.id,
-        name,
-        price:fuelPrice(result.text,prodcd),
-        brand:tag(b,'POLL_DIV_CO')||tag(b,'POLL_DIV_CD'),
-        address,
-        phone:tag(b,'TEL')||meta.phone,
-        x:Number(tag(b,'GIS_X_COOR')||0),
-        y:Number(tag(b,'GIS_Y_COOR')||0),
-        district:districtFromAddress(address,meta.district),
-        open24h:true
-      });
-    }catch{
-      stations.push({...meta,price:0,brand:'',x:0,y:0,open24h:true});
-    }
-  }
-  stations.sort((a,b)=>((a.price||Number.MAX_SAFE_INTEGER)-(b.price||Number.MAX_SAFE_INTEGER)));
-  return stations;
-}
-
-module.exports=async(req,res)=>{try{const prodcd=req.query?.prodcd||'B027';const mode=req.query?.mode||'area';
-if(mode==='detail'){const id=String(req.query?.id||'').trim();if(!id)return res.status(400).json({ok:false,error:'주유소 ID가 필요합니다.'});res.setHeader('Cache-Control','public, s-maxage=2592000, stale-while-revalidate=604800');const detail=await getDetail(id);return res.status(200).json({ok:true,...detail})}
-if(mode==='24h'){res.setHeader('Cache-Control','public, s-maxage=300, stale-while-revalidate=900');const stations=await get24h(prodcd);return res.status(200).json({ok:true,updatedAt:new Date().toISOString(),note:'최근 24시간 운영 확인 주유소',stations})}
-res.setHeader('Cache-Control','public, s-maxage=300, stale-while-revalidate=900');
-if(mode==='near'){const x=Number(req.query?.x),y=Number(req.query?.y);if(!Number.isFinite(x)||!Number.isFinite(y))return res.status(400).json({ok:false,error:'현재 위치 좌표가 필요합니다.'});const result=await getNearby(x,y,prodcd);if(!result.stations.length)return res.status(502).json({ok:false,error:'반경 5km 내 주유소 가격정보가 없습니다.'});return res.status(200).json({ok:true,updatedAt:new Date().toISOString(),note:'현재 위치 반경 5km · 가까운 순',stations:result.stations})}
-const area=req.query?.area||'both';const targets=[];if(area==='seoul'){targets.push(AREAS.seoul)}else{if(area==='both'||area==='yongsan')targets.push(AREAS.yongsan);if(area==='both'||area==='mapo')targets.push(AREAS.mapo);if(area==='both'||area==='seodaemun')targets.push(AREAS.seodaemun)}if(!targets.length)return res.status(400).json({ok:false,error:'잘못된 지역값입니다.'});const stations=[],debug=[];for(const target of targets){const result=await getLowPrice(target.district,target.code,prodcd);stations.push(...result.stations);debug.push({district:target.district,areaCode:target.code,count:result.stations.length})}stations.sort((a,b)=>a.price-b.price);if(!stations.length)return res.status(502).json({ok:false,error:'오피넷 가격 데이터가 없습니다.',prodcd,debug});return res.status(200).json({ok:true,updatedAt:new Date().toISOString(),note:area==='seoul'?'오피넷 서울 전체 최저가 TOP20 기준':undefined,detectedAreas:{yongsan:AREAS.yongsan,mapo:AREAS.mapo,seodaemun:AREAS.seodaemun,seoul:AREAS.seoul},stations})}catch(e){return res.status(500).json({ok:false,error:e.message})}};
+async function getLowPrice(district,code,prodcd){const result=await opinet('lowTop10.do',{prodcd,area:code,cnt:20});const stations=oilBlocks(result.text).map(b=>{const id=tag(b,'UNI_ID'),address=tag(b,'NEW_ADR')||tag(b,'VAN_ADR'),name=tag(b,'OS_NM');return{id,name,price:Number((tag(b,'PRICE')||'0').replace(/,/g,'')),brand:tag(b,'POLL_DIV_CD')||tag(b,'POLL_DIV_CO'),address,x:Number(tag(b,'GIS_X_COOR')||0),y:Number(tag(b,'GIS_Y_COOR')||0),district:districtFromAddress(address,district),open24h:isOpen24h(id,name)}}).filter(x=>x.name&&x.price>0);return{stations,raw:result.text}}
+async function getNearby(x,y,prodcd){let kx=x,ky=y;if(Math.abs(x)<=180&&Math.abs(y)<=90){[kx,ky]=proj4('WGS84',KATEC,[x,y])}const result=await opinet('aroundAll.do',{x:kx,y:ky,radius:5000,sort:2,prodcd});const stations=oilBlocks(result.text).map(b=>{const id=tag(b,'UNI_ID'),name=tag(b,'OS_NM');return{id,name,price:Number((tag(b,'PRICE')||'0').replace(/,/g,'')),brand:tag(b,'POLL_DIV_CD')||tag(b,'POLL_DIV_CO'),address:'',x:Number(tag(b,'GIS_X_COOR')||0),y:Number(tag(b,'GIS_Y_COOR')||0),distance:Number(tag(b,'DISTANCE')||0),district:'내 주변',open24h:isOpen24h(id,name)}}).filter(x=>x.name&&x.price>0).sort((a,b)=>a.distance-b.distance);return{stations,raw:result.text}}
+async function getDetail(id){const result=await opinet('detailById.do',{id});const b=oilBlocks(result.text)[0]||'',address=tag(b,'NEW_ADR')||tag(b,'VAN_ADR');return{id:tag(b,'UNI_ID')||id,name:tag(b,'OS_NM'),phone:tag(b,'TEL'),address,district:districtFromAddress(address,'')}}
+async function get24h(prodcd){const stations=[];for(const meta of OPEN_24H_STATIONS){try{const result=await opinet('detailById.do',{id:meta.id});const b=oilBlocks(result.text)[0]||'',address=tag(b,'NEW_ADR')||tag(b,'VAN_ADR')||meta.address,name=tag(b,'OS_NM')||meta.name;stations.push({id:meta.id,name,price:fuelPrice(result.text,prodcd),brand:tag(b,'POLL_DIV_CO')||tag(b,'POLL_DIV_CD'),address,phone:tag(b,'TEL')||meta.phone,x:Number(tag(b,'GIS_X_COOR')||0),y:Number(tag(b,'GIS_Y_COOR')||0),district:districtFromAddress(address,meta.district),open24h:true})}catch{stations.push({...meta,price:0,brand:'',x:0,y:0,open24h:true})}}stations.sort((a,b)=>(a.price||Number.MAX_SAFE_INTEGER)-(b.price||Number.MAX_SAFE_INTEGER));return stations}
+module.exports=async(req,res)=>{try{const prodcd=req.query?.prodcd||'B027',mode=req.query?.mode||'area';if(mode==='detail'){const id=String(req.query?.id||'').trim();if(!id)return res.status(400).json({ok:false,error:'주유소 ID가 필요합니다.'});res.setHeader('Cache-Control','public, s-maxage=2592000, stale-while-revalidate=604800');return res.status(200).json({ok:true,...await getDetail(id)})}if(mode==='24h'){res.setHeader('Cache-Control','public, s-maxage=300, stale-while-revalidate=900');return res.status(200).json({ok:true,updatedAt:new Date().toISOString(),note:'최근 24시간 운영 확인 주유소',stations:await get24h(prodcd)})}res.setHeader('Cache-Control','public, s-maxage=300, stale-while-revalidate=900');if(mode==='near'){const x=Number(req.query?.x),y=Number(req.query?.y);if(!Number.isFinite(x)||!Number.isFinite(y))return res.status(400).json({ok:false,error:'현재 위치 좌표가 필요합니다.'});const result=await getNearby(x,y,prodcd);if(!result.stations.length)return res.status(502).json({ok:false,error:'반경 5km 내 주유소 가격정보가 없습니다.'});return res.status(200).json({ok:true,updatedAt:new Date().toISOString(),note:'현재 위치 반경 5km · 가까운 순',stations:result.stations})}const area=req.query?.area||'both',targets=[];if(area==='seoul')targets.push(AREAS.seoul);else{if(area==='both'||area==='yongsan')targets.push(AREAS.yongsan);if(area==='both'||area==='mapo')targets.push(AREAS.mapo);if(area==='both'||area==='seodaemun')targets.push(AREAS.seodaemun)}if(!targets.length)return res.status(400).json({ok:false,error:'잘못된 지역값입니다.'});const stations=[],debug=[];for(const target of targets){const result=await getLowPrice(target.district,target.code,prodcd);stations.push(...result.stations);debug.push({district:target.district,areaCode:target.code,count:result.stations.length})}stations.sort((a,b)=>a.price-b.price);if(!stations.length)return res.status(502).json({ok:false,error:'오피넷 가격 데이터가 없습니다.',prodcd,debug});return res.status(200).json({ok:true,updatedAt:new Date().toISOString(),note:area==='seoul'?'오피넷 서울 전체 최저가 TOP20 기준':undefined,detectedAreas:{yongsan:AREAS.yongsan,mapo:AREAS.mapo,seodaemun:AREAS.seodaemun,seoul:AREAS.seoul},stations})}catch(e){return res.status(500).json({ok:false,error:e.message})}};
