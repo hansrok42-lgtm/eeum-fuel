@@ -1,5 +1,10 @@
 const KEY = (process.env.OPINET_KEY || '').trim();
 
+const AREAS = {
+  yongsan: { district: '용산구', code: '0110' },
+  mapo: { district: '마포구', code: '0109' }
+};
+
 function decodeHtml(s = '') {
   return String(s)
     .replace(/&lt;/g, '<')
@@ -17,8 +22,7 @@ function tag(body, name) {
 }
 
 function oilBlocks(xml = '') {
-  return [...xml.matchAll(/<OIL>([\s\S]*?)<\/OIL>/gi)]
-    .map(m => m[1]);
+  return [...xml.matchAll(/<OIL>([\s\S]*?)<\/OIL>/gi)].map(m => m[1]);
 }
 
 async function opinet(endpoint, params = {}) {
@@ -26,10 +30,7 @@ async function opinet(endpoint, params = {}) {
     throw new Error('OPINET_KEY가 설정되지 않았습니다.');
   }
 
-  const url = new URL(
-    `https://www.opinet.co.kr/api/${endpoint}`
-  );
-
+  const url = new URL(`https://www.opinet.co.kr/api/${endpoint}`);
   url.searchParams.set('out', 'xml');
   url.searchParams.set('code', KEY);
 
@@ -37,30 +38,10 @@ async function opinet(endpoint, params = {}) {
     url.searchParams.set(k, String(v));
   }
 
-  const response = await fetch(url.toString(), {
-    cache: 'no-store'
-  });
-
+  const response = await fetch(url.toString(), { cache: 'no-store' });
   const text = await response.text();
 
-  return {
-    status: response.status,
-    text
-  };
-}
-
-async function getSeoulAreas() {
-  const result = await opinet('areaCode.do', { area: '01' });
-  const blocks = oilBlocks(result.text);
-  const areas = blocks.map(b => ({
-    code: tag(b, 'AREA_CD'),
-    name: tag(b, 'AREA_NM')
-  }));
-
-  const yongsan = areas.find(x => x.name.replace(/\s/g, '') === '용산구');
-  const mapo = areas.find(x => x.name.replace(/\s/g, '') === '마포구');
-
-  return { yongsan, mapo, allAreas: areas, raw: result.text };
+  return { status: response.status, text };
 }
 
 async function getLowPrice(district, code, prodcd) {
@@ -86,30 +67,20 @@ async function getLowPrice(district, code, prodcd) {
 }
 
 module.exports = async (req, res) => {
-  res.setHeader('Cache-Control', 'no-store');
+  // 같은 조건의 조회 결과는 Vercel CDN에서 10분간 재사용.
+  // stale-while-revalidate로 캐시 만료 뒤에도 기존 결과를 잠시 보여주면서 갱신합니다.
+  res.setHeader('Cache-Control', 'public, s-maxage=600, stale-while-revalidate=3600');
 
   try {
     const prodcd = req.query?.prodcd || 'B027';
     const area = req.query?.area || 'both';
-    const areaResult = await getSeoulAreas();
-
-    if (!areaResult.yongsan || !areaResult.mapo) {
-      return res.status(502).json({
-        ok: false,
-        error: '오피넷에서 서울 지역코드를 가져오지 못했습니다.',
-        areaCodeDebug: {
-          receivedAreas: areaResult.allAreas,
-          responsePreview: areaResult.raw.replace(/\s+/g, ' ').slice(0, 1500)
-        }
-      });
-    }
 
     const targets = [];
-    if (area === 'both' || area === 'yongsan') {
-      targets.push({ district: '용산구', code: areaResult.yongsan.code });
-    }
-    if (area === 'both' || area === 'mapo') {
-      targets.push({ district: '마포구', code: areaResult.mapo.code });
+    if (area === 'both' || area === 'yongsan') targets.push(AREAS.yongsan);
+    if (area === 'both' || area === 'mapo') targets.push(AREAS.mapo);
+
+    if (!targets.length) {
+      return res.status(400).json({ ok: false, error: '잘못된 지역값입니다.' });
     }
 
     const stations = [];
@@ -121,8 +92,7 @@ module.exports = async (req, res) => {
       debug.push({
         district: target.district,
         areaCode: target.code,
-        count: result.stations.length,
-        responsePreview: result.raw.replace(/\s+/g, ' ').slice(0, 800)
+        count: result.stations.length
       });
     }
 
@@ -131,11 +101,7 @@ module.exports = async (req, res) => {
     if (!stations.length) {
       return res.status(502).json({
         ok: false,
-        error: '지역코드는 정상 조회됐지만 가격 데이터가 없습니다.',
-        detectedAreas: {
-          yongsan: areaResult.yongsan,
-          mapo: areaResult.mapo
-        },
+        error: '오피넷 가격 데이터가 없습니다.',
         prodcd,
         debug
       });
@@ -145,8 +111,8 @@ module.exports = async (req, res) => {
       ok: true,
       updatedAt: new Date().toISOString(),
       detectedAreas: {
-        yongsan: areaResult.yongsan,
-        mapo: areaResult.mapo
+        yongsan: AREAS.yongsan,
+        mapo: AREAS.mapo
       },
       stations
     });
