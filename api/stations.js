@@ -7,15 +7,27 @@ const AREAS = {
   seoul: { district: '서울전역', code: '01' }
 };
 
+// 공개 영업정보에서 24시간 운영으로 확인된 주유소만 표시합니다.
+// 이름은 오피넷 상호 변경에 대응하도록 핵심 상호명으로 매칭합니다.
+const OPEN_24H_NAMES = [
+  '에스에스오토셀프',
+  '대흥주유소',
+  '양지주유소',
+  '안국주유소',
+  '가재울뉴타운주유소',
+  '행촌제2주유소'
+];
+function isOpen24h(name=''){return OPEN_24H_NAMES.some(n=>String(name).includes(n))}
+function displayDistrict(district,name){return isOpen24h(name)?`🌙 24시간 · ${district}`:district}
 function decodeHtml(s = '') { return String(s).replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g,"'"); }
 function tag(body,name){const m=body.match(new RegExp(`<${name}>([\\s\\S]*?)<\\/${name}>`,'i'));return m?decodeHtml(m[1].trim()):''}
 function oilBlocks(xml=''){return [...xml.matchAll(/<OIL>([\s\S]*?)<\/OIL>/gi)].map(m=>m[1])}
 async function opinet(endpoint,params={}){if(!KEY)throw new Error('OPINET_KEY가 설정되지 않았습니다.');const url=new URL(`https://www.opinet.co.kr/api/${endpoint}`);url.searchParams.set('out','xml');url.searchParams.set('code',KEY);for(const[k,v]of Object.entries(params))url.searchParams.set(k,String(v));const response=await fetch(url.toString(),{cache:'no-store'});return{status:response.status,text:await response.text()}}
 function districtFromAddress(address,fallback){const m=String(address||'').match(/서울(?:특별시)?\s+([^\s]+구)/);return m?m[1]:fallback}
 
-async function getLowPrice(district,code,prodcd){const result=await opinet('lowTop10.do',{prodcd,area:code,cnt:20});const stations=oilBlocks(result.text).map(b=>{const address=tag(b,'NEW_ADR')||tag(b,'VAN_ADR');return{id:tag(b,'UNI_ID'),name:tag(b,'OS_NM'),price:Number((tag(b,'PRICE')||'0').replace(/,/g,'')),brand:tag(b,'POLL_DIV_CD')||tag(b,'POLL_DIV_CO'),address,x:Number(tag(b,'GIS_X_COOR')||0),y:Number(tag(b,'GIS_Y_COOR')||0),district:districtFromAddress(address,district)}}).filter(x=>x.name&&x.price>0);return{stations,raw:result.text}}
+async function getLowPrice(district,code,prodcd){const result=await opinet('lowTop10.do',{prodcd,area:code,cnt:20});const stations=oilBlocks(result.text).map(b=>{const address=tag(b,'NEW_ADR')||tag(b,'VAN_ADR');const name=tag(b,'OS_NM');const baseDistrict=districtFromAddress(address,district);return{id:tag(b,'UNI_ID'),name,price:Number((tag(b,'PRICE')||'0').replace(/,/g,'')),brand:tag(b,'POLL_DIV_CD')||tag(b,'POLL_DIV_CO'),address,x:Number(tag(b,'GIS_X_COOR')||0),y:Number(tag(b,'GIS_Y_COOR')||0),district:displayDistrict(baseDistrict,name),open24h:isOpen24h(name)}}).filter(x=>x.name&&x.price>0);return{stations,raw:result.text}}
 
-async function getNearby(x,y,prodcd){const result=await opinet('aroundAll.do',{x,y,radius:5000,sort:2,prodcd});const stations=oilBlocks(result.text).map(b=>({id:tag(b,'UNI_ID'),name:tag(b,'OS_NM'),price:Number((tag(b,'PRICE')||'0').replace(/,/g,'')),brand:tag(b,'POLL_DIV_CD')||tag(b,'POLL_DIV_CO'),address:'',x:Number(tag(b,'GIS_X_COOR')||0),y:Number(tag(b,'GIS_Y_COOR')||0),distance:Number(tag(b,'DISTANCE')||0),district:'내 주변'})).filter(x=>x.name&&x.price>0).sort((a,b)=>a.distance-b.distance);return{stations,raw:result.text}}
+async function getNearby(x,y,prodcd){const result=await opinet('aroundAll.do',{x,y,radius:5000,sort:2,prodcd});const stations=oilBlocks(result.text).map(b=>{const name=tag(b,'OS_NM');return{id:tag(b,'UNI_ID'),name,price:Number((tag(b,'PRICE')||'0').replace(/,/g,'')),brand:tag(b,'POLL_DIV_CD')||tag(b,'POLL_DIV_CO'),address:'',x:Number(tag(b,'GIS_X_COOR')||0),y:Number(tag(b,'GIS_Y_COOR')||0),distance:Number(tag(b,'DISTANCE')||0),district:displayDistrict('내 주변',name),open24h:isOpen24h(name)}}).filter(x=>x.name&&x.price>0).sort((a,b)=>a.distance-b.distance);return{stations,raw:result.text}}
 
 async function getDetail(id){const result=await opinet('detailById.do',{id});const b=oilBlocks(result.text)[0]||'';const address=tag(b,'NEW_ADR')||tag(b,'VAN_ADR');return{id:tag(b,'UNI_ID')||id,name:tag(b,'OS_NM'),phone:tag(b,'TEL'),address,district:districtFromAddress(address,'')}}
 
